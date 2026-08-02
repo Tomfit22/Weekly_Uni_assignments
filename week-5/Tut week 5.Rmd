@@ -1,0 +1,97 @@
+---
+title: "Week 5 Imputation"
+author: "Tom Fitzpatrick"
+date: "2025-08-13"
+output: html_document
+---
+
+## Data Import and Summary
+
+We import the dataset and take a quick look at the structure and overall proportions by gender.
+
+
+# Load core packages
+```{r,echo=TRUE, results='hide', message=FALSE, warning=FALSE}
+library(tidyverse)
+library(mice)
+library(broom)
+```
+# Load and inspect data
+```{r }
+
+referendum <- read_csv("/Users/tomfitzpatrick/Data201/referendum_survey_lab_version.csv")
+
+```
+# Overall counts and proportions by gender
+```{r }
+gender_table <- referendum %>%
+  count(gender, referendum) %>%
+  group_by(gender) %>%
+  mutate(prop_yes = n / sum(n) * 100)
+gender_table
+```
+# Fit complete-case logistic regression
+```{r}
+
+model_complete <- glm(referendum ~ age + gender, data = referendum, family = binomial())
+summary(model_complete)
+```
+
+
+# Perform multiple imputation
+```{r}
+imputed_data <- mice(referendum %>% select(age, gender, referendum), m = 5, seed = 123)
+```
+# Fit logistic regression models to imputed data
+```{r}
+model_imputed <- with(imputed_data, glm(referendum ~ age + gender, family = binomial()))
+```
+# Pool results
+```{r}
+pooled_results <- pool(model_imputed)
+```
+# Get model terms for filtering
+```{r}
+all_terms <- tidy(model_complete)$term
+gender_terms <- grep("^gender", all_terms, value = TRUE)
+```
+# Tidy data for complete-case model
+```{r}
+complete_tidy <- tidy(model_complete) %>%
+  filter(term == "age" | term %in% gender_terms) %>%
+  mutate(analysis = "Complete Cases")
+```
+# Tidy data for pooled imputed model
+```{r}
+imputed_tidy <- tidy(pooled_results) %>%
+  filter(term == "age" | term %in% gender_terms) %>%
+  mutate(analysis = "Multiple Imputation")
+```
+# Combine and recode terms for plotting
+```{r}
+combined <- bind_rows(complete_tidy, imputed_tidy) %>%
+  filter(term != "(Intercept)") %>%
+  mutate(term = recode(term,
+                       age = "Age",
+                       `genderFemale` = "Gender: Female",
+                       `genderMale` = "Gender: Male",
+                       `genderGenderqueer, neither exclusively male nor female` = "Gender: Queer/Nonbinary",
+                       `genderOther (Please State)` = "Gender: Other",
+                       `genderTransgender Female (Male to Female: MTF)` = "Gender: Trans Female (MTF)",
+                       `genderTransgender Male (Female to Male; FTM)` = "Gender: Trans Male (FTM)"
+  )) %>%
+  filter(std.error < 10)
+```
+# Plot estimates with error bars
+```{r}
+ggplot(combined, aes(x = term, y = estimate, color = analysis)) +
+  geom_point(position = position_dodge(width = 0.5), size = 3) +
+  geom_errorbar(aes(ymin = estimate - 1.96 * std.error,
+                    ymax = estimate + 1.96 * std.error),
+                position = position_dodge(width = 0.5), width = 0.2) +
+  labs(title = "Comparison of Logistic Regression Estimates",
+       y = "Estimate (log-odds)",
+       x = "Predictor",
+       color = "Analysis Method") +
+  theme_minimal()
+```
